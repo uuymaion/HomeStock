@@ -74,6 +74,8 @@ struct MainTabView: View {
         TabView {
             ItemListView()
                 .tabItem { Label("查詢", systemImage: "magnifyingglass") }
+            MapView()
+                .tabItem { Label("地圖", systemImage: "map") }
 
             NavigationStack {
                 ItemFormView()
