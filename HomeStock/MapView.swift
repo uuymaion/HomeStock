@@ -253,6 +253,7 @@ struct RoomGridView: View {
 
     @EnvironmentObject private var store: HomeStore
     @State private var drag: DragState?
+    @State private var pending: [String: GridRect] = [:]   // 剛放開、等資料庫確認中的位置
 
     struct DragState {
         var id: String
@@ -274,8 +275,10 @@ struct RoomGridView: View {
                     }
                 }
                 .frame(width: CGFloat(room.gridW) * cell, height: CGFloat(room.gridH) * cell)
+                .coordinateSpace(name: "grid")
                 .padding(16)
             }
+            .scrollDisabled(drag != nil)
         }
     }
 
@@ -304,7 +307,7 @@ struct RoomGridView: View {
 
     private func cabinetView(_ cabinet: Cabinet, cell: CGFloat) -> some View {
         let dragging = drag?.id == cabinet.id
-        let rect = dragging ? (drag?.rect ?? cabinet.rect) : cabinet.rect
+        let rect = dragging ? (drag?.rect ?? cabinet.rect) : (pending[cabinet.id] ?? cabinet.rect)
         let invalid = dragging
             ? !(drag?.valid ?? true)
             : !store.canPlace(cabinet.rect, in: room, excluding: cabinet.id)
@@ -344,7 +347,7 @@ struct RoomGridView: View {
 
     private func furnitureView(_ item: Furniture, cell: CGFloat) -> some View {
         let dragging = drag?.id == item.id
-        let rect = dragging ? (drag?.rect ?? item.rect) : item.rect
+        let rect = dragging ? (drag?.rect ?? item.rect) : (pending[item.id] ?? item.rect)
         let invalid = dragging
             ? !(drag?.valid ?? true)
             : !store.canPlace(item.rect, in: room, excluding: item.id)
@@ -399,7 +402,7 @@ struct RoomGridView: View {
     /// 拖曳時對齊格子；放開時位置合法才存檔，不合法就彈回原位
     private func dragGesture(id: String, original: GridRect, cell: CGFloat,
                              commit: @escaping (GridRect) -> Void) -> some Gesture {
-        DragGesture()
+        DragGesture(coordinateSpace: .named("grid"))
             .onChanged { value in
                 var moved = original
                 moved.x = original.x + Int((value.translation.width / cell).rounded())
@@ -408,7 +411,12 @@ struct RoomGridView: View {
             }
             .onEnded { _ in
                 if let current = drag, current.id == id, current.valid, current.rect != original {
+                    pending[id] = current.rect
                     commit(current.rect)
+                    Task {
+                        try? await Task.sleep(for: .seconds(1))
+                        pending[id] = nil
+                    }
                 }
                 drag = nil
             }
