@@ -310,8 +310,8 @@ struct MapView: View {
         } else {
             switch tool {
             case .move: text = "拖曳移動櫃子和傢俱，點一下可以調整大小、旋轉或刪除；點牆或門可以調整長度或刪除。"
-            case .wall: text = "從格線的交叉點拖到另一點畫一道牆，會自動拉成直線。"
-            case .door: text = "點一下靠近的格線，就會在那裡放一扇門。"
+            case .wall: text = "從格線的交叉點拖到另一點畫一道牆，會自動拉成直線；點一下已經畫好的牆就會刪掉。"
+            case .door: text = "點一下靠近的格線放一扇門，再點一次同一扇門就會刪掉。"
             }
         }
 
@@ -436,6 +436,7 @@ struct RoomGridView: View {
                         Color.white.opacity(0.001)
                             .contentShape(Rectangle())
                             .gesture(wallGesture(cell: cell))
+                            .simultaneousGesture(wallTapGesture(cell: cell))
                     }
                     if editing && tool == .door {
                         Color.white.opacity(0.001)
@@ -640,13 +641,48 @@ struct RoomGridView: View {
                 if toVertical <= toHorizontal {
                     let x = clamp(Int(fx.rounded()), 0, room.gridW)
                     let y = clamp(Int(fy.rounded(.down)), 0, room.gridH - 1)
-                    store.addEdge(roomId: room.id, kind: .door, x: x, y: y, horizontal: false, length: 1)
+                    toggleDoor(x: x, y: y, horizontal: false)
                 } else {
                     let x = clamp(Int(fx.rounded(.down)), 0, room.gridW - 1)
                     let y = clamp(Int(fy.rounded()), 0, room.gridH)
-                    store.addEdge(roomId: room.id, kind: .door, x: x, y: y, horizontal: true, length: 1)
+                    toggleDoor(x: x, y: y, horizontal: true)
                 }
             }
+    }
+    /// 畫牆模式下點一下牆，就刪掉那一道牆
+    private func wallTapGesture(cell: CGFloat) -> some Gesture {
+        SpatialTapGesture(coordinateSpace: .named("grid"))
+            .onEnded { value in
+                let fx = value.location.x / cell
+                let fy = value.location.y / cell
+                let horizontal = abs(fy - fy.rounded()) < abs(fx - fx.rounded())
+                let x = horizontal ? Int(fx.rounded(.down)) : Int(fx.rounded())
+                let y = horizontal ? Int(fy.rounded()) : Int(fy.rounded(.down))
+
+                let wall = store.edges(in: room.id).first { edge in
+                    guard edge.kind == .wall, edge.horizontal == horizontal else { return false }
+                    return horizontal
+                        ? (edge.y == y && x >= edge.x && x < edge.x + edge.length)
+                        : (edge.x == x && y >= edge.y && y < edge.y + edge.length)
+                }
+                if let wall {
+                    store.deleteEdge(wall)
+                }
+            }
+    }
+    /// 那段格線上已經有門就刪掉，沒有就放一扇
+    private func toggleDoor(x: Int, y: Int, horizontal: Bool) {
+        let existing = store.edges(in: room.id).first { edge in
+            guard edge.kind == .door, edge.horizontal == horizontal else { return false }
+            return horizontal
+                ? (edge.y == y && x >= edge.x && x < edge.x + edge.length)
+                : (edge.x == x && y >= edge.y && y < edge.y + edge.length)
+        }
+        if let existing {
+            store.deleteEdge(existing)
+        } else {
+            store.addEdge(roomId: room.id, kind: .door, x: x, y: y, horizontal: horizontal, length: 1)
+        }
     }
 
     // MARK: 共用
