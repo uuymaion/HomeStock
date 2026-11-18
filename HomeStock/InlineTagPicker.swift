@@ -134,7 +134,6 @@ struct InlineTagPicker: View {
             .buttonStyle(.plain)
         }
     }
-    #imageLiteral(resourceName: "截圖 2026-11-18 上午9.18.07.png")
     // MARK: - 動作
 
     private func toggle(_ id: String) {

@@ -33,6 +33,7 @@ final class HomeStore: ObservableObject {
     @Published private(set) var rooms: [Room] = []
     @Published private(set) var cabinets: [Cabinet] = []
     @Published private(set) var boxes: [Box] = []
+    @Published private(set) var furniture: [Furniture] = []
     @Published private(set) var items: [Item] = [] {
         didSet { NotificationManager.shared.rescheduleAll(items: items) }
     }
@@ -170,6 +171,7 @@ final class HomeStore: ObservableObject {
         listenVisible(familyRef.collection("rooms"), "rooms", Room.self) { [weak self] in self?.rooms = $0 }
         listenVisible(familyRef.collection("cabinets"), "cabinets", Cabinet.self) { [weak self] in self?.cabinets = $0 }
         listenVisible(familyRef.collection("boxes"), "boxes", Box.self) { [weak self] in self?.boxes = $0 }
+        listenVisible(familyRef.collection("furniture"), "furniture", Furniture.self) { [weak self] in self?.furniture = $0 }
         listenVisible(familyRef.collection("items"), "items", Item.self) { [weak self] in self?.items = $0 }
     }
 
@@ -183,6 +185,7 @@ final class HomeStore: ObservableObject {
         rooms = []
         cabinets = []
         boxes = []
+        furniture = []
         items = []
     }
 
@@ -431,6 +434,11 @@ final class HomeStore: ObservableObject {
                 item.ownerUid = room.ownerUid
                 put(item, in: "items", batch: batch)
             }
+            for var item in furniture where item.roomId == room.id {
+                item.shared = shared
+                item.ownerUid = room.ownerUid
+                put(item, in: "furniture", batch: batch)
+            }
         }
         batch.commit()
     }
@@ -445,6 +453,9 @@ final class HomeStore: ObservableObject {
         for box in boxes where box.roomId == room.id {
             remove("boxes", box.id, batch: batch)
         }
+        for item in furniture where item.roomId == room.id {
+            remove("furniture", item.id, batch: batch)
+        }
         for var item in items where item.roomId == room.id {
             item.placement = Placement()
             put(item, in: "items", batch: batch)
@@ -456,7 +467,8 @@ final class HomeStore: ObservableObject {
 
     func addCabinet(roomId: String, name: String, rows: Int, cols: Int) {
         guard let room = self.room(roomId), let id = newId("cabinets") else { return }
-        put(Cabinet(id: id, roomId: roomId, name: name, rows: rows, cols: cols,
+        let spot = freeSpot(in: room, w: 2, h: 1) ?? (x: 0, y: 0)
+        put(Cabinet(id: id, roomId: roomId, name: name, rows: rows, cols: cols, x: spot.x, y: spot.y,
                     ownerUid: room.ownerUid, shared: room.shared), in: "cabinets")
     }
 
@@ -599,4 +611,81 @@ final class HomeStore: ObservableObject {
             NotificationManager.shared.notifyRestock(name: item.name, quantity: new, id: item.id)
         }
     }
+    // MARK: - 地圖（網格地板）
+
+        func furniture(in roomId: String) -> [Furniture] {
+            furniture.filter { $0.roomId == roomId }
+        }
+
+        /// 房間裡被櫃子和傢俱佔用的格子（可以排除某一個，例如正在拖曳的那個）
+        func occupiedRects(in roomId: String, excluding id: String? = nil) -> [GridRect] {
+            let cabinetRects = cabinets(in: roomId).filter { $0.id != id }.map(\.rect)
+            let furnitureRects = furniture(in: roomId).filter { $0.id != id }.map(\.rect)
+            return cabinetRects + furnitureRects
+        }
+
+        /// 這個位置能不能放：不能超出地板，也不能和其他東西重疊
+        func canPlace(_ rect: GridRect, in room: Room, excluding id: String? = nil) -> Bool {
+            guard rect.x >= 0, rect.y >= 0,
+                  rect.x + rect.w <= room.gridW, rect.y + rect.h <= room.gridH else { return false }
+            return !occupiedRects(in: room.id, excluding: id).contains { $0.intersects(rect) }
+        }
+
+        /// 從左上角開始找第一個放得下的空位
+        func freeSpot(in room: Room, w: Int, h: Int, excluding id: String? = nil) -> (x: Int, y: Int)? {
+            guard w <= room.gridW, h <= room.gridH else { return nil }
+            for y in 0...(room.gridH - h) {
+                for x in 0...(room.gridW - w) {
+                    if canPlace(GridRect(x: x, y: y, w: w, h: h), in: room, excluding: id) {
+                        return (x, y)
+                    }
+                }
+            }
+            return nil
+        }
+
+        func updateCabinetLayout(_ cabinet: Cabinet, x: Int, y: Int, w: Int, h: Int, rotated: Bool) {
+            var updated = cabinet
+            updated.x = x
+            updated.y = y
+            updated.w = w
+            updated.h = h
+            updated.rotated = rotated
+            put(updated, in: "cabinets")
+        }
+
+        /// 新增傢俱，自動放在第一個空位。沒有空位時回傳 false。
+        @discardableResult
+        func addFurniture(roomId: String, kind: FurnitureKind) -> Bool {
+            guard let room = self.room(roomId), let id = newId("furniture") else { return false }
+            let size = kind.defaultSize
+            guard let spot = freeSpot(in: room, w: size.w, h: size.h) else { return false }
+            put(Furniture(id: id, roomId: roomId, kindRaw: kind.rawValue,
+                          x: spot.x, y: spot.y, w: size.w, h: size.h,
+                          ownerUid: room.ownerUid, shared: room.shared), in: "furniture")
+            return true
+        }
+
+        func updateFurniture(_ item: Furniture) {
+            put(item, in: "furniture")
+        }
+
+        func deleteFurniture(_ item: Furniture) {
+            remove("furniture", item.id)
+        }
+
+        func updateRoomSize(_ room: Room, w: Int, h: Int) {
+            var updated = room
+            updated.gridW = w
+            updated.gridH = h
+            put(updated, in: "rooms")
+        }
+
+        /// 地板最小能縮到多大（不能把已經擺好的東西擠出去）
+        func minimumSize(of room: Room) -> (w: Int, h: Int) {
+            let rects = occupiedRects(in: room.id)
+            let w = rects.map { $0.x + $0.w }.max() ?? 0
+            let h = rects.map { $0.y + $0.h }.max() ?? 0
+            return (max(3, w), max(3, h))
+        }
 }
