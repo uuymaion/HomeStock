@@ -34,6 +34,8 @@ final class HomeStore: ObservableObject {
     @Published private(set) var cabinets: [Cabinet] = []
     @Published private(set) var boxes: [Box] = []
     @Published private(set) var furniture: [Furniture] = []
+    @Published private(set) var edges: [Edge] = []
+    @Published private(set) var furnitureTemplates: [FurnitureTemplate] = []
     @Published private(set) var items: [Item] = [] {
         didSet { NotificationManager.shared.rescheduleAll(items: items) }
     }
@@ -172,6 +174,8 @@ final class HomeStore: ObservableObject {
         listenVisible(familyRef.collection("cabinets"), "cabinets", Cabinet.self) { [weak self] in self?.cabinets = $0 }
         listenVisible(familyRef.collection("boxes"), "boxes", Box.self) { [weak self] in self?.boxes = $0 }
         listenVisible(familyRef.collection("furniture"), "furniture", Furniture.self) { [weak self] in self?.furniture = $0 }
+        listenVisible(familyRef.collection("edges"), "edges", Edge.self) { [weak self] in self?.edges = $0 }
+        listenAll(familyRef.collection("furnitureTemplates"), FurnitureTemplate.self) { [weak self] in self?.furnitureTemplates = $0 }
         listenVisible(familyRef.collection("items"), "items", Item.self) { [weak self] in self?.items = $0 }
     }
 
@@ -186,6 +190,8 @@ final class HomeStore: ObservableObject {
         cabinets = []
         boxes = []
         furniture = []
+        edges = []
+        furnitureTemplates = []
         items = []
     }
 
@@ -439,6 +445,11 @@ final class HomeStore: ObservableObject {
                 item.ownerUid = room.ownerUid
                 put(item, in: "furniture", batch: batch)
             }
+            for var edge in edges where edge.roomId == room.id {
+                edge.shared = shared
+                edge.ownerUid = room.ownerUid
+                put(edge, in: "edges", batch: batch)
+            }
         }
         batch.commit()
     }
@@ -455,6 +466,9 @@ final class HomeStore: ObservableObject {
         }
         for item in furniture where item.roomId == room.id {
             remove("furniture", item.id, batch: batch)
+        }
+        for edge in edges where edge.roomId == room.id {
+            remove("edges", edge.id, batch: batch)
         }
         for var item in items where item.roomId == room.id {
             item.placement = Placement()
@@ -687,5 +701,62 @@ final class HomeStore: ObservableObject {
             let w = rects.map { $0.x + $0.w }.max() ?? 0
             let h = rects.map { $0.y + $0.h }.max() ?? 0
             return (max(3, w), max(3, h))
+        }
+    // MARK: - 牆、門、自訂傢俱
+
+        func edges(in roomId: String) -> [Edge] {
+            edges.filter { $0.roomId == roomId }
+        }
+
+        func addEdge(roomId: String, kind: EdgeKind, x: Int, y: Int, horizontal: Bool, length: Int) {
+            guard let room = self.room(roomId), length > 0, let id = newId("edges") else { return }
+            // 一模一樣的就不重複加
+            let duplicate = edges(in: roomId).contains {
+                $0.kindRaw == kind.rawValue && $0.x == x && $0.y == y &&
+                $0.horizontal == horizontal && $0.length == length
+            }
+            guard !duplicate else { return }
+            put(Edge(id: id, roomId: roomId, kindRaw: kind.rawValue, x: x, y: y,
+                     horizontal: horizontal, length: length,
+                     ownerUid: room.ownerUid, shared: room.shared), in: "edges")
+        }
+
+        func updateEdge(_ edge: Edge) {
+            put(edge, in: "edges")
+        }
+
+        func deleteEdge(_ edge: Edge) {
+            remove("edges", edge.id)
+        }
+
+        /// 牆和門延伸到的最遠位置（縮小地板時不能比這個小）
+        func edgeExtent(of room: Room) -> (w: Int, h: Int) {
+            let list = edges(in: room.id)
+            let w = list.map { $0.horizontal ? $0.x + $0.length : $0.x }.max() ?? 0
+            let h = list.map { $0.horizontal ? $0.y : $0.y + $0.length }.max() ?? 0
+            return (w, h)
+        }
+
+        @discardableResult
+        func addFurnitureTemplate(name: String, symbol: String, w: Int, h: Int) -> String? {
+            guard let id = newId("furnitureTemplates") else { return nil }
+            put(FurnitureTemplate(id: id, name: name, symbol: symbol, w: w, h: h), in: "furnitureTemplates")
+            return id
+        }
+
+        func deleteFurnitureTemplate(_ template: FurnitureTemplate) {
+            remove("furnitureTemplates", template.id)
+        }
+
+        /// 用樣板在房間裡放一個自訂傢俱，自動找空位。沒有空位時回傳 false。
+        @discardableResult
+        func addCustomFurniture(roomId: String, template: FurnitureTemplate) -> Bool {
+            guard let room = self.room(roomId), let id = newId("furniture"),
+                  let spot = freeSpot(in: room, w: template.w, h: template.h) else { return false }
+            put(Furniture(id: id, roomId: roomId, kindRaw: FurnitureKind.custom.rawValue,
+                          name: template.name, symbol: template.symbol,
+                          x: spot.x, y: spot.y, w: template.w, h: template.h,
+                          ownerUid: room.ownerUid, shared: room.shared), in: "furniture")
+            return true
         }
 }

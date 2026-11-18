@@ -97,6 +97,8 @@ struct Furniture: HomeDoc {
     var id: String = ""
     var roomId: String
     var kindRaw: String
+    var name: String? = nil      // 自訂傢俱的名稱
+    var symbol: String? = nil    // 自訂傢俱的圖示
     var x: Int = 0
     var y: Int = 0
     var w: Int = 1
